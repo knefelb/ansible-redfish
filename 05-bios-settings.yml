@@ -1,0 +1,78 @@
+---
+# 05 — BIOS Settings
+# Read current BIOS attributes, or apply pending changes
+# Usage (read):  ansible-playbook 05-bios-settings.yml --extra-vars @secrets.yml --tags read
+# Usage (write): ansible-playbook 05-bios-settings.yml --extra-vars @secrets.yml --tags write
+# Note: BIOS changes are PENDING until next reboot
+
+- name: BIOS settings management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  vars:
+    # Override these with --extra-vars for write operations
+    bios_attributes: {}
+    # Example: --extra-vars '{"bios_attributes": {"ProcHyperthreading": "Enabled", "PowerProfile": "MaxPerf"}}'
+
+  tasks:
+    # --- READ ---
+    - name: Get current BIOS attributes
+      tags: [read, always]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1/Bios"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: bios_current
+
+    - name: Display BIOS version
+      tags: [read]
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} BIOS ===
+          Version: {{ bios_current.json.AttributeRegistry | default('N/A') }}
+          Attributes count: {{ bios_current.json.Attributes | length }}
+
+    - name: Show all BIOS attributes
+      tags: [read]
+      ansible.builtin.debug:
+        msg: "{{ bios_current.json.Attributes }}"
+        verbosity: 1
+
+    - name: Show specific common attributes
+      tags: [read]
+      ansible.builtin.debug:
+        msg: |
+          HyperThreading: {{ bios_current.json.Attributes.ProcHyperthreading | default('N/A') }}
+          Virtualization: {{ bios_current.json.Attributes.ProcVirtualization | default('N/A') }}
+          Power Profile: {{ bios_current.json.Attributes.PowerProfile | default('N/A') }}
+          Boot Mode: {{ bios_current.json.Attributes.BootMode | default('N/A') }}
+          SR-IOV: {{ bios_current.json.Attributes.Sriov | default('N/A') }}
+          TPM State: {{ bios_current.json.Attributes.TpmState | default('N/A') }}
+          Secure Boot: {{ bios_current.json.Attributes.SecureBootStatus | default('N/A') }}
+
+    # --- WRITE ---
+    - name: Apply BIOS settings (pending until reboot)
+      tags: [write, never]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1/Bios/Settings"
+        method: PATCH
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          Attributes: "{{ bios_attributes }}"
+        status_code: [200, 204]
+      when: bios_attributes | length > 0
+      register: bios_patch
+
+    - name: BIOS change result
+      tags: [write, never]
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: BIOS settings queued. Reboot required to apply."
+      when: bios_patch is changed

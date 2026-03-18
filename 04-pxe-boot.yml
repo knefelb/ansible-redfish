@@ -1,0 +1,67 @@
+---
+# 04 — PXE Boot Override
+# Sets one-time PXE boot for OS deployment, then reboots
+# Usage: ansible-playbook 04-pxe-boot.yml --extra-vars @secrets.yml -l dar-vm01
+
+- name: Set one-time PXE boot via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Confirm PXE boot
+      ansible.builtin.pause:
+        prompt: "This will set one-time PXE boot and reboot {{ ansible_play_hosts | join(', ') }}. Continue? (yes/no)"
+      register: confirm
+      run_once: true
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Aborted by user"
+      when: confirm.user_input | lower != 'yes'
+      run_once: true
+
+    - name: Set one-time PXE boot override
+      community.general.redfish_config:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: SetDefaultBootOrder
+        boot_override_mode: UEFI
+      register: boot_set
+      # Fallback to raw API if module doesn't support boot override directly
+
+    - name: Set boot override via raw Redfish PATCH
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1"
+        method: PATCH
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          Boot:
+            BootSourceOverrideTarget: Pxe
+            BootSourceOverrideEnabled: Once
+        status_code: [200, 204]
+      register: pxe_result
+
+    - name: Display boot override result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: PXE boot override set (one-time)"
+
+    - name: Reboot to PXE
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerGracefulRestart
+      register: reboot_result
+
+    - name: Reboot initiated
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Rebooting to PXE now"

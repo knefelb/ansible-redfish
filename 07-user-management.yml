@@ -1,0 +1,76 @@
+---
+# 07 — iLO User Management
+# List, create, or update iLO local accounts
+# Usage (list):   ansible-playbook 07-user-management.yml --extra-vars @secrets.yml --tags list
+# Usage (create): ansible-playbook 07-user-management.yml --extra-vars @secrets.yml --tags create \
+#                   --extra-vars '{"new_user": "monitor", "new_pass": "SecureP@ss1", "new_role": "ReadOnly"}'
+
+- name: iLO user management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  vars:
+    new_user: ""
+    new_pass: ""
+    new_role: "ReadOnly"  # ReadOnly, Operator, Administrator
+
+  tasks:
+    # --- LIST ---
+    - name: Get account list
+      tags: [list]
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Accounts
+        command:
+          - GetAccountInventory
+      register: accounts
+
+    - name: Display accounts
+      tags: [list]
+      ansible.builtin.debug:
+        msg: "{{ accounts.redfish_facts }}"
+
+    # --- CREATE ---
+    - name: Validate new user params
+      tags: [create, never]
+      ansible.builtin.assert:
+        that:
+          - new_user | length > 0
+          - new_pass | length > 0
+        fail_msg: "new_user and new_pass must be provided"
+
+    - name: Find available account slot
+      tags: [create, never]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/AccountService/Accounts"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: account_list
+
+    - name: Create new iLO user
+      tags: [create, never]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/AccountService/Accounts"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          UserName: "{{ new_user }}"
+          Password: "{{ new_pass }}"
+          RoleId: "{{ new_role }}"
+        status_code: [201, 200]
+      register: create_result
+
+    - name: User created
+      tags: [create, never]
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Created user '{{ new_user }}' with role '{{ new_role }}'"

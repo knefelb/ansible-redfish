@@ -1,0 +1,17 @@
+---
+all:
+  children:
+    ilo:
+      hosts:
+        dar-vm01:
+          baseuri: 10.10.202.14
+        dar-vm02:
+          baseuri: 10.10.202.15
+        dar-vm03:
+          baseuri: 10.10.202.16
+      vars:
+        username: iloadmin
+        # Password should be in vault-encrypted secrets.yml or passed via --extra-vars
+        # password: CHANGEME
+        ansible_connection: local
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"

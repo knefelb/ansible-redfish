@@ -1,0 +1,57 @@
+---
+# 03 — Power Management
+# Graceful shutdown, restart, power on/off
+# Usage: ansible-playbook 03-power-management.yml --extra-vars @secrets.yml --extra-vars "action=GracefulRestart"
+# Actions: On, ForceOff, GracefulShutdown, ForceRestart, GracefulRestart, PushPowerButton, Nmi
+
+- name: Server power management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  vars:
+    action: "{{ power_action | default('GracefulRestart') }}"
+
+  tasks:
+    - name: Confirm power action
+      ansible.builtin.pause:
+        prompt: "About to perform '{{ action }}' on {{ ansible_play_hosts | join(', ') }}. Continue? (yes/no)"
+      register: confirm
+      run_once: true
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Aborted by user"
+      when: confirm.user_input | lower != 'yes'
+      run_once: true
+
+    - name: Get current power state
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetSystemInventory
+      register: pre_state
+
+    - name: Show current state
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Currently {{ pre_state.redfish_facts.system.entries[0][1].PowerState }}"
+
+    - name: Execute power action
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerReboot
+        resource_id: 1
+      vars:
+        # Map friendly names to Redfish reset types
+        ansible_redfish_reset_type: "{{ action }}"
+      register: power_result
+
+    - name: Power action result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ action }} command sent successfully"

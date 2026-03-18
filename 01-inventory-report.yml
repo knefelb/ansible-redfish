@@ -1,0 +1,83 @@
+---
+# 01 — Fleet Inventory Report
+# Pulls system info, BIOS, firmware, CPU, memory, storage from all iLOs
+# Usage: ansible-playbook 01-inventory-report.yml --extra-vars @secrets.yml
+
+- name: Gather server fleet inventory via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Get system inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetSystemInventory
+      register: system_info
+
+    - name: Get CPU inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetCpuInventory
+      register: cpu_info
+
+    - name: Get memory inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetMemoryInventory
+      register: memory_info
+
+    - name: Get storage inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetStorageControllerInventory
+      register: storage_info
+
+    - name: Get firmware inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Update
+        command:
+          - GetFirmwareInventory
+      register: firmware_info
+
+    - name: Get NIC inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetNicInventory
+      register: nic_info
+
+    - name: Display system summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} ({{ baseuri }}) ===
+          Model: {{ system_info.redfish_facts.system.entries[0][1].Model | default('N/A') }}
+          Serial: {{ system_info.redfish_facts.system.entries[0][1].SerialNumber | default('N/A') }}
+          BIOS: {{ system_info.redfish_facts.system.entries[0][1].BiosVersion | default('N/A') }}
+          Power: {{ system_info.redfish_facts.system.entries[0][1].PowerState | default('N/A') }}
+          Health: {{ system_info.redfish_facts.system.entries[0][1].Status.Health | default('N/A') }}
+          CPUs: {{ cpu_info.redfish_facts.cpu.entries | length }} installed
+          Memory: {{ memory_info.redfish_facts.memory.entries | length }} DIMMs

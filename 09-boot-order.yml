@@ -1,0 +1,83 @@
+---
+# 09 — Boot Order Management
+# Read or change persistent boot order and boot mode
+# Usage (read):  ansible-playbook 09-boot-order.yml --extra-vars @secrets.yml --tags read
+# Usage (set):   ansible-playbook 09-boot-order.yml --extra-vars @secrets.yml --tags set \
+#                  --extra-vars '{"boot_target": "Hdd", "boot_mode": "Continuous"}'
+# Usage (clear): ansible-playbook 09-boot-order.yml --extra-vars @secrets.yml --tags clear
+# Targets: None, Pxe, Hdd, Cd, Usb, BiosSetup, UefiShell, UefiHttp, SDCard
+
+- name: Boot order management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  vars:
+    boot_target: "Hdd"
+    boot_mode: "Continuous"  # Once or Continuous
+
+  tasks:
+    # --- READ ---
+    - name: Get current boot settings
+      tags: [read, always]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1"
+        method: GET
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+      register: system_info
+
+    - name: Display boot config
+      tags: [read]
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Boot Config ===
+          Current Override: {{ system_info.json.Boot.BootSourceOverrideTarget }}
+          Override Mode: {{ system_info.json.Boot.BootSourceOverrideEnabled }}
+          Boot Mode: {{ system_info.json.Boot.BootSourceOverrideMode }}
+          Allowed Targets: {{ system_info.json.Boot['BootSourceOverrideTarget@Redfish.AllowableValues'] | join(', ') }}
+
+    # --- SET ---
+    - name: Set boot override
+      tags: [set, never]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1"
+        method: PATCH
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          Boot:
+            BootSourceOverrideTarget: "{{ boot_target }}"
+            BootSourceOverrideEnabled: "{{ boot_mode }}"
+        status_code: [200, 204]
+
+    - name: Boot override set
+      tags: [set, never]
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Boot set to {{ boot_target }} ({{ boot_mode }})"
+
+    # --- CLEAR ---
+    - name: Clear boot override
+      tags: [clear, never]
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1"
+        method: PATCH
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          Boot:
+            BootSourceOverrideEnabled: Disabled
+        status_code: [200, 204]
+
+    - name: Boot override cleared
+      tags: [clear, never]
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Boot override cleared — using default BIOS boot order"

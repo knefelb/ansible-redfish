@@ -1,0 +1,68 @@
+---
+# 06 — Firmware Update
+# Push firmware image to iLO via SimpleUpdate
+# Usage: ansible-playbook 06-firmware-update.yml --extra-vars @secrets.yml --extra-vars "firmware_url=http://fileserver/ilo5_304.bin"
+# Supports: HTTP, HTTPS, CIFS, NFS image URIs
+
+- name: Firmware update via Redfish SimpleUpdate
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+  vars:
+    firmware_url: ""
+
+  tasks:
+    - name: Validate firmware URL provided
+      ansible.builtin.assert:
+        that:
+          - firmware_url | length > 0
+        fail_msg: "firmware_url must be provided via --extra-vars"
+
+    - name: Get current firmware versions
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Update
+        command:
+          - GetFirmwareInventory
+      register: fw_before
+
+    - name: Display current firmware
+      ansible.builtin.debug:
+        msg: "{{ fw_before.redfish_facts.firmware.entries }}"
+        verbosity: 1
+
+    - name: Confirm firmware update
+      ansible.builtin.pause:
+        prompt: "Push firmware from {{ firmware_url }} to {{ ansible_play_hosts | join(', ') }}? (yes/no)"
+      register: confirm
+      run_once: true
+
+    - name: Abort if not confirmed
+      ansible.builtin.fail:
+        msg: "Aborted by user"
+      when: confirm.user_input | lower != 'yes'
+      run_once: true
+
+    - name: Trigger SimpleUpdate
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/UpdateService/Actions/UpdateService.SimpleUpdate"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          ImageURI: "{{ firmware_url }}"
+        status_code: [200, 202, 204]
+      register: update_result
+
+    - name: Firmware update initiated
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}: Firmware update started
+          Task: {{ update_result.json.Id | default('submitted') }}
+          Note: Some updates require a reboot to take effect

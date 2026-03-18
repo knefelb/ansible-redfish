@@ -1,0 +1,67 @@
+---
+# 02 — Health Check
+# Pre-maintenance validation: checks system, PSU, thermal, storage health
+# Usage: ansible-playbook 02-health-check.yml --extra-vars @secrets.yml
+
+- name: Server health check via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - secrets.yml
+
+  tasks:
+    - name: Get system health
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetSystemInventory
+      register: system_health
+
+    - name: Get chassis thermal info
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Chassis
+        command:
+          - GetThermalSubsystem
+      register: thermal_info
+      ignore_errors: true
+
+    - name: Get power supply info
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Chassis
+        command:
+          - GetPowerSupplyInventory
+      register: psu_info
+      ignore_errors: true
+
+    - name: Get storage controller health
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command:
+          - GetStorageControllerInventory
+      register: storage_health
+
+    - name: Display health summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Health Check ===
+          System Health: {{ system_health.redfish_facts.system.entries[0][1].Status.Health | default('N/A') }}
+          Power State: {{ system_health.redfish_facts.system.entries[0][1].PowerState | default('N/A') }}
+
+    - name: FAIL if system health is not OK
+      ansible.builtin.assert:
+        that:
+          - system_health.redfish_facts.system.entries[0][1].Status.Health == "OK"
+        fail_msg: "⚠️ {{ inventory_hostname }} health is {{ system_health.redfish_facts.system.entries[0][1].Status.Health }}!"
+        success_msg: "✅ {{ inventory_hostname }} is healthy"
