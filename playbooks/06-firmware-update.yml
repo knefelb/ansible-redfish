@@ -1,0 +1,61 @@
+---
+# 06 - Firmware Update
+# Push firmware updates to servers via Redfish SimpleUpdate
+# Usage:
+#   ansible-playbook playbooks/06-firmware-update.yml -e "firmware_url=http://fileserver/ilo5_304.bin" -e @secrets.yml
+#
+# The firmware image must be accessible via HTTP/HTTPS/CIFS/NFS from the iLO
+# HPE firmware images: https://support.hpe.com/connect/s/softwaredetails
+
+- name: Firmware update via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    firmware_url: ""
+
+  tasks:
+    - name: Validate firmware URL
+      ansible.builtin.assert:
+        that:
+          - firmware_url | length > 0
+        fail_msg: "firmware_url is required. Pass via -e 'firmware_url=http://server/image.bin'"
+
+    - name: Get current firmware inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Update
+        command: GetFirmwareInventory
+      register: firmware_before
+
+    - name: Display current firmware versions
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Current Firmware ===
+          {% for fw in firmware_before.redfish_facts.firmware.entries %}
+          {{ fw[1].Name | default('Unknown') }}: {{ fw[1].Version | default('N/A') }}
+          {% endfor %}
+
+    - name: Confirm firmware update
+      ansible.builtin.pause:
+        prompt: "About to push firmware from {{ firmware_url }} to {{ inventory_hostname }}. Press Enter to continue or Ctrl+C to abort"
+
+    - name: Push firmware update via SimpleUpdate
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Update
+        command: SimpleUpdate
+        update_image_uri: "{{ firmware_url }}"
+      register: update_result
+
+    - name: Firmware update initiated
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}: Firmware update initiated from {{ firmware_url }}
+          Note: Check iLO for update progress. Some updates require a reboot to take effect.

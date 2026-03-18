@@ -1,0 +1,51 @@
+---
+# 01 - Fleet Inventory Report
+# Pulls system info from all iLO hosts and generates a summary
+# Usage: ansible-playbook playbooks/01-inventory-report.yml --extra-vars @secrets.yml
+
+- name: Gather fleet inventory via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  tasks:
+    - name: Get system inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetSystemInventory
+      register: system_info
+
+    - name: Get BIOS attributes
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetBiosAttributes
+      register: bios_info
+
+    - name: Get firmware inventory
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Update
+        command: GetFirmwareInventory
+      register: firmware_info
+
+    - name: Display system summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} ===
+          Model:    {{ system_info.redfish_facts.system.entries[0][1].Model }}
+          Serial:   {{ system_info.redfish_facts.system.entries[0][1].SerialNumber }}
+          BIOS:     {{ system_info.redfish_facts.system.entries[0][1].BiosVersion }}
+          CPUs:     {{ system_info.redfish_facts.system.entries[0][1].ProcessorSummary.Count }}x {{ system_info.redfish_facts.system.entries[0][1].ProcessorSummary.Model }}
+          RAM:      {{ system_info.redfish_facts.system.entries[0][1].MemorySummary.TotalSystemMemoryGiB }} GB
+          Power:    {{ system_info.redfish_facts.system.entries[0][1].PowerState }}
+          Health:   {{ system_info.redfish_facts.system.entries[0][1].Status.Health }}
+          Hostname: {{ system_info.redfish_facts.system.entries[0][1].HostName }}

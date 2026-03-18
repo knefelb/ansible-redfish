@@ -1,0 +1,91 @@
+---
+# 07 - iLO User Management
+# Manage iLO user accounts via Redfish
+# Usage:
+#   List users:    ansible-playbook playbooks/07-user-management.yml -e @secrets.yml
+#   Create user:   ansible-playbook playbooks/07-user-management.yml -e '{"new_user": "monitor", "new_pass": "SecureP@ss1", "new_role": "ReadOnly"}' -e @secrets.yml
+#   Delete user:   ansible-playbook playbooks/07-user-management.yml -e '{"delete_user": "olduser"}' -e @secrets.yml
+#   Update pass:   ansible-playbook playbooks/07-user-management.yml -e '{"update_user": "admin", "update_pass": "NewP@ss1"}' -e @secrets.yml
+
+- name: iLO user management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    new_user: ""
+    new_pass: ""
+    new_role: "ReadOnly"
+    delete_user: ""
+    update_user: ""
+    update_pass: ""
+
+  tasks:
+    # --- List users ---
+    - name: Get iLO accounts
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Accounts
+        command: GetUsers
+      register: users_info
+
+    - name: Display iLO users
+      ansible.builtin.debug:
+        msg: "{{ users_info.redfish_facts.user.entries }}"
+      when: new_user == "" and delete_user == "" and update_user == ""
+
+    # --- Create user ---
+    - name: Create iLO user
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Accounts
+        command: AddUser
+        id: "{{ new_user }}"
+        new_username: "{{ new_user }}"
+        new_password: "{{ new_pass }}"
+        roleid: "{{ new_role }}"
+      when: new_user | length > 0
+      register: create_result
+
+    - name: User created
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: User '{{ new_user }}' created with role '{{ new_role }}'"
+      when: new_user | length > 0
+
+    # --- Delete user ---
+    - name: Delete iLO user
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Accounts
+        command: DeleteUser
+        id: "{{ delete_user }}"
+      when: delete_user | length > 0
+
+    - name: User deleted
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: User '{{ delete_user }}' deleted"
+      when: delete_user | length > 0
+
+    # --- Update password ---
+    - name: Update user password
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Accounts
+        command: UpdateUserPassword
+        id: "{{ update_user }}"
+        new_password: "{{ update_pass }}"
+      when: update_user | length > 0
+
+    - name: Password updated
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Password updated for '{{ update_user }}'"
+      when: update_user | length > 0

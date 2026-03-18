@@ -1,0 +1,87 @@
+---
+# 04 - Boot Override
+# Set one-time or persistent boot source via Redfish
+# Usage:
+#   One-time PXE boot:    ansible-playbook playbooks/04-boot-override.yml -e "boot_target=Pxe boot_mode=Once" -e @secrets.yml
+#   Persistent HDD:       ansible-playbook playbooks/04-boot-override.yml -e "boot_target=Hdd boot_mode=Continuous" -e @secrets.yml
+#   Boot to BIOS setup:   ansible-playbook playbooks/04-boot-override.yml -e "boot_target=BiosSetup boot_mode=Once" -e @secrets.yml
+#   Clear override:       ansible-playbook playbooks/04-boot-override.yml -e "boot_target=None boot_mode=Disabled" -e @secrets.yml
+#
+# Limit to specific host: -l dar-vm01
+
+- name: Set boot override via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    boot_target: ""
+    boot_mode: "Once"
+    reboot_after: false
+    valid_targets:
+      - "None"
+      - "Pxe"
+      - "Hdd"
+      - "Cd"
+      - "Usb"
+      - "BiosSetup"
+      - "UefiShell"
+      - "UefiHttp"
+      - "Utilities"
+      - "Diags"
+      - "SDCard"
+
+  tasks:
+    - name: Validate boot target
+      ansible.builtin.assert:
+        that:
+          - boot_target in valid_targets
+        fail_msg: "Invalid boot target '{{ boot_target }}'. Valid targets: {{ valid_targets | join(', ') }}"
+
+    - name: Get current boot config
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetSystemInventory
+      register: system_info
+
+    - name: Show current boot config
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }} current boot:
+            Target:  {{ system_info.redfish_facts.system.entries[0][1].Boot.BootSourceOverrideTarget }}
+            Enabled: {{ system_info.redfish_facts.system.entries[0][1].Boot.BootSourceOverrideEnabled }}
+            Mode:    {{ system_info.redfish_facts.system.entries[0][1].Boot.BootSourceOverrideMode }}
+
+    - name: Set boot override
+      community.general.redfish_config:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: SetDefaultBootOrder
+        boot_override_target: "{{ boot_target }}"
+        boot_override_enabled: "{{ boot_mode }}"
+      register: boot_result
+
+    - name: Boot override set
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Boot override set to {{ boot_target }} ({{ boot_mode }})"
+
+    - name: Reboot server to apply boot override
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerGracefulRestart
+        resource_id: 1
+      when: reboot_after | bool
+
+    - name: Reboot initiated
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Reboot initiated to apply boot override"
+      when: reboot_after | bool

@@ -1,0 +1,71 @@
+---
+# 03 - Power Management
+# Control server power state via Redfish
+# Usage:
+#   Graceful shutdown:  ansible-playbook playbooks/03-power-management.yml -e "action=GracefulShutdown" -e @secrets.yml
+#   Power on:           ansible-playbook playbooks/03-power-management.yml -e "action=On" -e @secrets.yml
+#   Force restart:      ansible-playbook playbooks/03-power-management.yml -e "action=ForceRestart" -e @secrets.yml
+#   Graceful restart:   ansible-playbook playbooks/03-power-management.yml -e "action=GracefulRestart" -e @secrets.yml
+#   Force off:          ansible-playbook playbooks/03-power-management.yml -e "action=ForceOff" -e @secrets.yml
+#
+# Limit to specific host: -l dar-vm01
+
+- name: Server power management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    action: ""
+    valid_actions:
+      - "On"
+      - "ForceOff"
+      - "GracefulShutdown"
+      - "ForceRestart"
+      - "GracefulRestart"
+      - "PushPowerButton"
+      - "Nmi"
+
+  tasks:
+    - name: Validate action parameter
+      ansible.builtin.assert:
+        that:
+          - action in valid_actions
+        fail_msg: |
+          Invalid action '{{ action }}'. Valid actions: {{ valid_actions | join(', ') }}
+        success_msg: "Action '{{ action }}' is valid"
+
+    - name: Get current power state
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetSystemInventory
+      register: system_info
+
+    - name: Show current power state
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} is currently {{ system_info.redfish_facts.system.entries[0][1].PowerState }}"
+
+    - name: Confirm destructive action
+      ansible.builtin.pause:
+        prompt: "About to {{ action }} on {{ inventory_hostname }} (currently {{ system_info.redfish_facts.system.entries[0][1].PowerState }}). Press Enter to continue or Ctrl+C to abort"
+      when: action in ['ForceOff', 'ForceRestart', 'GracefulShutdown']
+
+    - name: Execute power action
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerReboot
+        resource_id: 1
+      environment:
+        reset_type: "{{ action }}"
+      register: power_result
+
+    - name: Power action result
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ action }} command sent successfully"

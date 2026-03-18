@@ -1,4 +1,5 @@
 secrets.yml
 *.retry
+.vault_pass
 __pycache__/
-.env
+*.pyc

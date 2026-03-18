@@ -1,0 +1,81 @@
+---
+# 08 - Event Subscriptions
+# Set up Redfish event subscriptions for alerting
+# Usage:
+#   List subscriptions:    ansible-playbook playbooks/08-event-subscriptions.yml -e @secrets.yml
+#   Create subscription:   ansible-playbook playbooks/08-event-subscriptions.yml -e "webhook_url=http://monitor:8080/alerts" -e @secrets.yml
+#   Delete subscription:   ansible-playbook playbooks/08-event-subscriptions.yml -e "delete_sub_id=1" -e @secrets.yml
+#
+# The webhook URL must be reachable from the iLO management network
+# Events: Alert, StatusChange, ResourceAdded, ResourceRemoved
+
+- name: Redfish event subscription management
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    webhook_url: ""
+    delete_sub_id: ""
+    event_types:
+      - Alert
+      - StatusChange
+
+  tasks:
+    # --- List subscriptions ---
+    - name: Get current event subscriptions
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/EventService/Subscriptions"
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: subs_info
+
+    - name: Display subscriptions
+      ansible.builtin.debug:
+        msg: "{{ subs_info.json }}"
+      when: webhook_url == "" and delete_sub_id == ""
+
+    # --- Create subscription ---
+    - name: Create event subscription
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/EventService/Subscriptions"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body:
+          Destination: "{{ webhook_url }}"
+          EventTypes: "{{ event_types }}"
+          Protocol: Redfish
+          Context: "ansible-{{ inventory_hostname }}"
+        status_code: 201
+      when: webhook_url | length > 0
+      register: create_sub
+
+    - name: Subscription created
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Event subscription created → {{ webhook_url }}"
+      when: webhook_url | length > 0
+
+    # --- Delete subscription ---
+    - name: Delete event subscription
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/EventService/Subscriptions/{{ delete_sub_id }}"
+        method: DELETE
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 204]
+      when: delete_sub_id | length > 0
+
+    - name: Subscription deleted
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Subscription {{ delete_sub_id }} deleted"
+      when: delete_sub_id | length > 0

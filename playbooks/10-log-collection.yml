@@ -1,0 +1,94 @@
+---
+# 10 - Log Collection
+# Pull iLO event logs and IML (Integrated Management Log)
+# Usage:
+#   Collect logs:   ansible-playbook playbooks/10-log-collection.yml -e @secrets.yml
+#   Clear logs:     ansible-playbook playbooks/10-log-collection.yml -e "clear_logs=true" -e @secrets.yml
+#   Save to file:   ansible-playbook playbooks/10-log-collection.yml -e "save_to=/tmp/logs" -e @secrets.yml
+
+- name: Collect iLO logs via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    clear_logs: false
+    save_to: ""
+
+  tasks:
+    - name: Get Integrated Management Log (IML)
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1/LogServices/IML/Entries"
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: iml_logs
+
+    - name: Get iLO Event Log
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Managers/1/LogServices/IEL/Entries"
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        return_content: true
+      register: iel_logs
+
+    - name: Display IML entries
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} — Integrated Management Log ===
+          Total entries: {{ iml_logs.json.Members | length }}
+          {% for entry in iml_logs.json.Members[:20] %}
+          [{{ entry.Created }}] {{ entry.Severity | default('Info') }}: {{ entry.Message }}
+          {% endfor %}
+          {% if iml_logs.json.Members | length > 20 %}
+          ... and {{ iml_logs.json.Members | length - 20 }} more
+          {% endif %}
+
+    - name: Display iLO Event Log entries
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} — iLO Event Log ===
+          Total entries: {{ iel_logs.json.Members | length }}
+          {% for entry in iel_logs.json.Members[:20] %}
+          [{{ entry.Created }}] {{ entry.Severity | default('Info') }}: {{ entry.Message }}
+          {% endfor %}
+          {% if iel_logs.json.Members | length > 20 %}
+          ... and {{ iel_logs.json.Members | length - 20 }} more
+          {% endif %}
+
+    - name: Save logs to file
+      ansible.builtin.copy:
+        content: |
+          {{ inventory_hostname }} — Log Export — {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')) }}
+
+          === Integrated Management Log ===
+          {{ iml_logs.json | to_nice_json }}
+
+          === iLO Event Log ===
+          {{ iel_logs.json | to_nice_json }}
+        dest: "{{ save_to }}/{{ inventory_hostname }}-logs.json"
+      delegate_to: localhost
+      when: save_to | length > 0
+
+    - name: Clear IML
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Systems/1/LogServices/IML/Actions/LogService.ClearLog"
+        method: POST
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        body_format: json
+        body: {}
+        status_code: [200, 204]
+      when: clear_logs | bool
+
+    - name: Logs cleared
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: IML cleared"
+      when: clear_logs | bool

@@ -1,6 +1,6 @@
 # Ansible Redfish Playbooks
 
-Ansible playbooks for managing HPE ProLiant servers via Redfish/iLO API.
+Ansible playbooks for managing HPE ProLiant servers via the Redfish API (iLO 5).
 
 ## Prerequisites
 
@@ -11,81 +11,73 @@ ansible-galaxy collection install community.general
 
 ## Setup
 
-1. Copy secrets: `cp secrets.yml.example secrets.yml`
-2. Edit with real passwords: `vim secrets.yml`
-3. Encrypt: `ansible-vault encrypt secrets.yml`
+1. Copy and encrypt secrets:
+   ```bash
+   cp secrets.yml.example secrets.yml
+   # Edit with your iLO password
+   ansible-vault encrypt secrets.yml
+   ```
+
+2. Update `inventory.yml` with your server iLO IPs
 
 ## Playbooks
 
-| # | Playbook | Description | Tags |
-|---|----------|-------------|------|
-| 01 | `01-inventory-report.yml` | Pull system info, CPU, memory, storage, firmware, NICs | — |
-| 02 | `02-health-check.yml` | Pre-maintenance health validation (fails if not OK) | — |
-| 03 | `03-power-management.yml` | Graceful shutdown, restart, power on/off | — |
-| 04 | `04-pxe-boot.yml` | Set one-time PXE boot + reboot for OS deployment | — |
-| 05 | `05-bios-settings.yml` | Read or change BIOS attributes | `read`, `write` |
-| 06 | `06-firmware-update.yml` | Push firmware via SimpleUpdate | — |
-| 07 | `07-user-management.yml` | List or create iLO local accounts | `list`, `create` |
-| 08 | `08-event-subscriptions.yml` | Manage Redfish event subscriptions (webhooks) | `list`, `create`, `delete` |
-| 09 | `09-boot-order.yml` | Read, set, or clear boot override | `read`, `set`, `clear` |
+| # | Playbook | Description |
+|---|----------|-------------|
+| 01 | `inventory-report` | Pull model, serial, BIOS, CPU, RAM from all servers |
+| 02 | `health-check` | Validate system, thermal, power, storage health |
+| 03 | `power-management` | Graceful shutdown, power on, force restart |
+| 04 | `boot-override` | One-time PXE boot, BIOS setup, persistent HDD |
+| 05 | `bios-settings` | Read/modify BIOS attributes (pending until reboot) |
+| 06 | `firmware-update` | Push firmware via SimpleUpdate |
+| 07 | `user-management` | Create, delete, update iLO user accounts |
+| 08 | `event-subscriptions` | Set up webhook alerts for hardware events |
+| 09 | `virtual-media` | Mount ISOs for remote OS installation |
+| 10 | `log-collection` | Pull/clear IML and iLO event logs |
 
 ## Usage Examples
 
 ```bash
-# Inventory report — all servers
-ansible-playbook 01-inventory-report.yml --ask-vault-pass
+# Fleet inventory report
+ansible-playbook playbooks/01-inventory-report.yml --vault-password-file ~/.vault_pass
 
-# Health check — single server
-ansible-playbook 02-health-check.yml --ask-vault-pass -l dar-vm01
+# Health check all servers
+ansible-playbook playbooks/02-health-check.yml --vault-password-file ~/.vault_pass
 
-# Graceful restart
-ansible-playbook 03-power-management.yml --ask-vault-pass --extra-vars "power_action=GracefulRestart"
+# Graceful restart a specific server
+ansible-playbook playbooks/03-power-management.yml -e "action=GracefulRestart" -l dar-vm01 --vault-password-file ~/.vault_pass
 
-# PXE boot a specific server
-ansible-playbook 04-pxe-boot.yml --ask-vault-pass -l dar-vm02
+# One-time PXE boot for OS deployment
+ansible-playbook playbooks/04-boot-override.yml -e "boot_target=Pxe boot_mode=Once reboot_after=true" -l dar-vm01 --vault-password-file ~/.vault_pass
 
 # Read BIOS settings
-ansible-playbook 05-bios-settings.yml --ask-vault-pass --tags read
+ansible-playbook playbooks/05-bios-settings.yml -l dar-vm01 --vault-password-file ~/.vault_pass
 
-# Change BIOS setting (pending until reboot)
-ansible-playbook 05-bios-settings.yml --ask-vault-pass --tags write \
-  --extra-vars '{"bios_attributes": {"ProcHyperthreading": "Enabled"}}'
+# Set BIOS attributes
+ansible-playbook playbooks/05-bios-settings.yml -e '{"bios_changes": {"ProcHyperthreading": "Enabled"}, "reboot_after": true}' --vault-password-file ~/.vault_pass
 
-# Firmware update
-ansible-playbook 06-firmware-update.yml --ask-vault-pass \
-  --extra-vars "firmware_url=http://fileserver/ilo5_304.bin"
+# Mount ISO and boot from it
+ansible-playbook playbooks/09-virtual-media.yml -e "iso_url=http://fileserver/ubuntu.iso boot_from_media=true" -l dar-vm01 --vault-password-file ~/.vault_pass
 
-# List iLO users
-ansible-playbook 07-user-management.yml --ask-vault-pass --tags list
-
-# Create read-only monitoring user on all iLOs
-ansible-playbook 07-user-management.yml --ask-vault-pass --tags create \
-  --extra-vars '{"new_user": "monitor", "new_pass": "Mon1tor!", "new_role": "ReadOnly"}'
-
-# Read boot order
-ansible-playbook 09-boot-order.yml --ask-vault-pass --tags read
-
-# Set persistent HDD boot
-ansible-playbook 09-boot-order.yml --ask-vault-pass --tags set \
-  --extra-vars '{"boot_target": "Hdd", "boot_mode": "Continuous"}'
+# Collect logs and save to file
+ansible-playbook playbooks/10-log-collection.yml -e "save_to=/tmp/logs" --vault-password-file ~/.vault_pass
 ```
 
 ## Inventory
 
-Edit `inventory.yml` to add/remove servers. Each host needs:
+Servers are defined in `inventory.yml`. Each host needs:
 - `baseuri` — iLO IP address
-- Credentials in `secrets.yml` (shared) or per-host overrides
+- Connection is `local` (API calls run from the control node, not via SSH to iLO)
 
-## Safety
+## Security Notes
 
-- Power and boot playbooks require interactive confirmation
-- BIOS writes go to `/Bios/Settings` (pending) — no changes until reboot
-- Firmware updates may require reboot to activate
-- Destructive tags use `never` — must be explicitly called
+- Passwords stored in `ansible-vault` encrypted `secrets.yml`
+- All Redfish calls use HTTPS (self-signed certs accepted)
+- Create a dedicated read-only iLO user for monitoring playbooks
+- Use a privileged user only for power/config/firmware operations
 
-## Redfish Resources
+## Related
 
+- [Redfish iLO Study Notes](https://github.com/knefelb/redfish-ilo-study)
 - [HPE iLO 5 Redfish API Docs](https://hewlettpackard.github.io/ilo-rest-api-docs/ilo5/)
-- [DMTF Redfish Spec](https://www.dmtf.org/standards/redfish)
-- [Ansible redfish_info module](https://docs.ansible.com/ansible/latest/collections/community/general/redfish_info_module.html)
-- [Ansible redfish_command module](https://docs.ansible.com/ansible/latest/collections/community/general/redfish_command_module.html)
+- [Ansible Redfish Modules](https://docs.ansible.com/ansible/latest/collections/community/general/redfish_info_module.html)

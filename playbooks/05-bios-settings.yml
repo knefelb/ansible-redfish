@@ -1,0 +1,67 @@
+---
+# 05 - BIOS Settings
+# Read and modify BIOS settings via Redfish
+# Usage:
+#   Read all BIOS settings:    ansible-playbook playbooks/05-bios-settings.yml -e @secrets.yml
+#   Set specific attributes:   ansible-playbook playbooks/05-bios-settings.yml -e @secrets.yml -e '{"bios_changes": {"ProcHyperthreading": "Enabled", "PowerProfile": "MaxPerf"}}'
+#   Reboot after changes:      ansible-playbook playbooks/05-bios-settings.yml -e @secrets.yml -e '{"bios_changes": {"ProcHyperthreading": "Enabled"}, "reboot_after": true}'
+#
+# Note: BIOS changes are pending until next reboot
+
+- name: BIOS settings management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    bios_changes: {}
+    reboot_after: false
+
+  tasks:
+    - name: Get current BIOS attributes
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetBiosAttributes
+      register: bios_info
+
+    - name: Display current BIOS attributes
+      ansible.builtin.debug:
+        msg: "{{ bios_info.redfish_facts.bios_attribute.entries[0][1] }}"
+      when: bios_changes | length == 0
+
+    - name: Apply BIOS changes
+      community.general.redfish_config:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: SetBiosAttributes
+        bios_attributes: "{{ bios_changes }}"
+      register: bios_result
+      when: bios_changes | length > 0
+
+    - name: BIOS changes pending
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}: BIOS changes queued (pending reboot):
+          {{ bios_changes | to_nice_yaml }}
+      when: bios_changes | length > 0
+
+    - name: Reboot to apply BIOS changes
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerGracefulRestart
+        resource_id: 1
+      when: bios_changes | length > 0 and reboot_after | bool
+
+    - name: Reboot notice
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Rebooting to apply BIOS changes"
+      when: bios_changes | length > 0 and reboot_after | bool

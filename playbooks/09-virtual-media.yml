@@ -1,0 +1,81 @@
+---
+# 09 - Virtual Media
+# Mount/unmount ISO images for remote OS installation
+# Usage:
+#   Mount ISO:     ansible-playbook playbooks/09-virtual-media.yml -e "iso_url=http://fileserver/ubuntu-22.04.iso" -e @secrets.yml
+#   Unmount:       ansible-playbook playbooks/09-virtual-media.yml -e "unmount=true" -e @secrets.yml
+#   Mount + PXE:   ansible-playbook playbooks/09-virtual-media.yml -e "iso_url=http://fileserver/ubuntu.iso" -e "boot_from_media=true" -e @secrets.yml
+
+- name: Virtual media management via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  vars:
+    iso_url: ""
+    unmount: false
+    boot_from_media: false
+
+  tasks:
+    # --- Mount ISO ---
+    - name: Mount virtual media ISO
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Manager
+        command: VirtualMediaInsert
+        virtual_media:
+          image_url: "{{ iso_url }}"
+        resource_id: 1
+      when: iso_url | length > 0 and not unmount
+      register: mount_result
+
+    - name: ISO mounted
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Mounted {{ iso_url }} as virtual media"
+      when: iso_url | length > 0 and not unmount
+
+    # --- Set boot from virtual media ---
+    - name: Set one-time boot from CD/virtual media
+      community.general.redfish_config:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: SetDefaultBootOrder
+        boot_override_target: Cd
+        boot_override_enabled: Once
+      when: boot_from_media | bool
+
+    - name: Reboot to boot from virtual media
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: PowerGracefulRestart
+        resource_id: 1
+      when: boot_from_media | bool
+
+    - name: Boot from media initiated
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Rebooting to boot from virtual media"
+      when: boot_from_media | bool
+
+    # --- Unmount ---
+    - name: Eject virtual media
+      community.general.redfish_command:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Manager
+        command: VirtualMediaEject
+        resource_id: 1
+      when: unmount | bool
+
+    - name: Virtual media ejected
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: Virtual media ejected"
+      when: unmount | bool

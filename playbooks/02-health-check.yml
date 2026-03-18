@@ -1,0 +1,75 @@
+---
+# 02 - Health Check
+# Validates all components are healthy before maintenance
+# Usage: ansible-playbook playbooks/02-health-check.yml --extra-vars @secrets.yml
+
+- name: Pre-maintenance health check via Redfish
+  hosts: ilo
+  gather_facts: false
+  vars_files:
+    - ../secrets.yml
+
+  tasks:
+    - name: Get system health
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetSystemInventory
+      register: system_info
+
+    - name: Get chassis thermal
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Chassis
+        command: GetChassisThermals
+      register: thermal_info
+
+    - name: Get chassis power
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Chassis
+        command: GetChassisPower
+      register: power_info
+
+    - name: Get storage health
+      community.general.redfish_info:
+        baseuri: "{{ baseuri }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        category: Systems
+        command: GetStorageControllerInventory
+      register: storage_info
+      ignore_errors: true
+
+    - name: Check system health
+      ansible.builtin.assert:
+        that:
+          - system_info.redfish_facts.system.entries[0][1].Status.Health == "OK"
+        fail_msg: "❌ {{ inventory_hostname }}: System health is {{ system_info.redfish_facts.system.entries[0][1].Status.Health }}"
+        success_msg: "✅ {{ inventory_hostname }}: System health OK"
+
+    - name: Display thermal summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Thermal ===
+          {% for temp in thermal_info.redfish_facts.chassis_thermal.entries[0][1].Temperatures %}
+          {% if temp.Status.State == 'Enabled' %}
+          {{ temp.Name }}: {{ temp.ReadingCelsius }}°C ({{ temp.Status.Health }})
+          {% endif %}
+          {% endfor %}
+
+    - name: Display power summary
+      ansible.builtin.debug:
+        msg: |
+          === {{ inventory_hostname }} Power ===
+          {% for psu in power_info.redfish_facts.chassis_power.entries[0][1].PowerSupplies %}
+          {% if psu.Status.State == 'Enabled' %}
+          PSU {{ loop.index }}: {{ psu.PowerInputWatts | default('N/A') }}W input, {{ psu.PowerCapacityWatts }}W capacity ({{ psu.Status.Health }})
+          {% endif %}
+          {% endfor %}
