@@ -1,81 +1,200 @@
 ---
-# 09 - Virtual Media
-# Mount/unmount ISO images for remote OS installation
+# 07 — Virtual Media (ISO Mount/Eject)
+# Mount or eject an ISO via iLO Virtual Media over Redfish
+# ISO must be served via HTTP/HTTPS (iLO fetches it directly)
+#
 # Usage:
-#   Mount ISO:     ansible-playbook playbooks/09-virtual-media.yml -e "iso_url=http://fileserver/ubuntu-22.04.iso" -e @secrets.yml
-#   Unmount:       ansible-playbook playbooks/09-virtual-media.yml -e "unmount=true" -e @secrets.yml
-#   Mount + PXE:   ansible-playbook playbooks/09-virtual-media.yml -e "iso_url=http://fileserver/ubuntu.iso" -e "boot_from_media=true" -e @secrets.yml
+#   Mount:  ansible-playbook 07-virtual-media.yml -l dar-vm02 -e "action=mount iso_url=http://fileserver/image.iso"
+#   Eject:  ansible-playbook 07-virtual-media.yml -l dar-vm02 -e "action=eject"
+#   Status: ansible-playbook 07-virtual-media.yml -l dar-vm02 -e "action=status"
+#   Mount + boot from ISO: add -e "boot_from_iso=true"
 
-- name: Virtual media management via Redfish
+- name: iLO Virtual Media management
   hosts: ilo
   gather_facts: false
-  vars_files:
-    - ../secrets.yml
-
   vars:
-    iso_url: ""
-    unmount: false
-    boot_from_media: false
+    action: "status"         # mount | eject | status
+    iso_url: ""              # required for action=mount
+    virtual_media_slot: "2"  # 1=floppy, 2=DVD (check status to confirm)
+    boot_from_iso: false     # set true to configure one-time CD boot
 
   tasks:
-    # --- Mount ISO ---
-    - name: Mount virtual media ISO
-      community.general.redfish_command:
-        baseuri: "{{ baseuri }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        category: Manager
-        command: VirtualMediaInsert
-        virtual_media:
-          image_url: "{{ iso_url }}"
-        resource_id: 1
-      when: iso_url | length > 0 and not unmount
-      register: mount_result
 
-    - name: ISO mounted
+    # ── Status (always runs first so we know current state) ──────────────────
+
+    - name: Get Virtual Media status
+      ansible.builtin.uri:
+        url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/"
+        user: "{{ username }}"
+        password: "{{ password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: 200
+      register: vm_status
+
+    - name: Display Virtual Media status
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: Mounted {{ iso_url }} as virtual media"
-      when: iso_url | length > 0 and not unmount
+        msg:
+          - "Slot:      VirtualMedia/{{ virtual_media_slot }}"
+          - "Type:      {{ vm_status.json.MediaTypes | default(['unknown']) | join(', ') }}"
+          - "Inserted:  {{ vm_status.json.Inserted | default(false) }}"
+          - "Image:     {{ vm_status.json.Image | default('none') }}"
+          - "Connected: {{ vm_status.json.Connected | default(false) }}"
 
-    # --- Set boot from virtual media ---
-    - name: Set one-time boot from CD/virtual media
-      community.general.redfish_config:
-        baseuri: "{{ baseuri }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        category: Systems
-        command: SetDefaultBootOrder
-        boot_override_target: Cd
-        boot_override_enabled: Once
-      when: boot_from_media | bool
+    # ── Mount ────────────────────────────────────────────────────────────────
 
-    - name: Reboot to boot from virtual media
-      community.general.redfish_command:
-        baseuri: "{{ baseuri }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        category: Systems
-        command: PowerGracefulRestart
-        resource_id: 1
-      when: boot_from_media | bool
+    - name: Validate iso_url provided for mount
+      ansible.builtin.fail:
+        msg: "iso_url must be provided via -e iso_url=http://..."
+      when:
+        - action == 'mount'
+        - iso_url | length == 0
 
-    - name: Boot from media initiated
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: Rebooting to boot from virtual media"
-      when: boot_from_media | bool
+    - name: Mount ISO and optionally set boot override
+      when: action == 'mount'
+      block:
 
-    # --- Unmount ---
-    - name: Eject virtual media
-      community.general.redfish_command:
-        baseuri: "{{ baseuri }}"
-        username: "{{ username }}"
-        password: "{{ password }}"
-        category: Manager
-        command: VirtualMediaEject
-        resource_id: 1
-      when: unmount | bool
+        - name: Mount ISO
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/Actions/VirtualMedia.InsertMedia"
+            method: POST
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            body_format: json
+            body:
+              Image: "{{ iso_url }}"
+              Inserted: true
+              WriteProtected: true
+            status_code: [200, 202, 204]
+          register: mount_result
 
-    - name: Virtual media ejected
-      ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: Virtual media ejected"
-      when: unmount | bool
+        - name: Set one-time boot to CD/DVD
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Systems/1/"
+            method: PATCH
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            body_format: json
+            body:
+              Boot:
+                BootSourceOverrideTarget: "Cd"
+                BootSourceOverrideEnabled: "Once"
+            status_code: [200, 202, 204]
+          when: boot_from_iso | bool
+
+        - name: Mount result
+          ansible.builtin.debug:
+            msg: >-
+              ISO mounted: {{ iso_url }}
+              {% if boot_from_iso | bool %} — one-time boot set to CD/DVD{% endif %}
+
+      rescue:
+        - name: "RESCUE: log what failed"
+          ansible.builtin.debug:
+            msg: "Mount operation failed on {{ inventory_hostname }}: {{ ansible_failed_task.name }} — {{ ansible_failed_result.msg | default('unknown error') }}"
+
+        - name: "RESCUE: eject ISO if it was partially mounted"
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/Actions/VirtualMedia.EjectMedia"
+            method: POST
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            body_format: json
+            body: {}
+            status_code: [200, 202, 204]
+          ignore_errors: true  # don't fail if nothing was mounted
+
+        - name: "RESCUE: clear boot override if it was set"
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Systems/1/"
+            method: PATCH
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            body_format: json
+            body:
+              Boot:
+                BootSourceOverrideTarget: "None"
+                BootSourceOverrideEnabled: "Disabled"
+            status_code: [200, 202, 204]
+          when: boot_from_iso | bool
+          ignore_errors: true
+
+        - name: "RESCUE: re-raise failure"
+          ansible.builtin.fail:
+            msg: "Mount failed and rollback attempted. Check iLO Virtual Media state manually."
+
+      always:
+        - name: Log final Virtual Media state
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/"
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            status_code: 200
+          register: final_status
+
+        - name: Display final state
+          ansible.builtin.debug:
+            msg:
+              - "Final state for {{ inventory_hostname }}:"
+              - "Inserted:  {{ final_status.json.Inserted | default(false) }}"
+              - "Image:     {{ final_status.json.Image | default('none') }}"
+
+    # ── Eject ────────────────────────────────────────────────────────────────
+
+    - name: Eject ISO
+      when: action == 'eject'
+      block:
+
+        - name: Eject ISO
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/Actions/VirtualMedia.EjectMedia"
+            method: POST
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            body_format: json
+            body: {}
+            status_code: [200, 202, 204]
+          register: eject_result
+
+        - name: Eject result
+          ansible.builtin.debug:
+            msg: "ISO ejected from VirtualMedia/{{ virtual_media_slot }}"
+
+      rescue:
+        - name: "RESCUE: eject failed"
+          ansible.builtin.debug:
+            msg: "Eject failed on {{ inventory_hostname }}: {{ ansible_failed_task.name }} — {{ ansible_failed_result.msg | default('unknown error') }}"
+
+        - name: "RESCUE: re-raise"
+          ansible.builtin.fail:
+            msg: "Eject failed — check iLO Virtual Media state manually."
+
+      always:
+        - name: Log final state after eject
+          ansible.builtin.uri:
+            url: "https://{{ baseuri }}/redfish/v1/Managers/1/VirtualMedia/{{ virtual_media_slot }}/"
+            user: "{{ username }}"
+            password: "{{ password }}"
+            force_basic_auth: true
+            validate_certs: false
+            status_code: 200
+          register: eject_final_status
+
+        - name: Display final state
+          ansible.builtin.debug:
+            msg:
+              - "Final state for {{ inventory_hostname }}:"
+              - "Inserted:  {{ eject_final_status.json.Inserted | default(false) }}"
+              - "Image:     {{ eject_final_status.json.Image | default('none') }}"
